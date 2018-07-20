@@ -17,21 +17,9 @@
         android:inputType="textPersonName"
         android:text="IP Address"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@+id/portText"
+        app:layout_constraintEnd_toStartOf="@+id/connectButton"
         app:layout_constraintHorizontal_chainStyle="packed"
         app:layout_constraintStart_toStartOf="parent" />
-
-    <EditText
-        android:id="@+id/portText"
-        android:layout_width="80dp"
-        android:layout_height="46dp"
-        android:layout_marginBottom="16dp"
-        android:ems="10"
-        android:inputType="number"
-        android:text="Port"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintEnd_toStartOf="@+id/connectButton" />
 
     <Button
         android:id="@+id/connectButton"

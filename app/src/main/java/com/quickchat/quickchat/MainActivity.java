@@ -30,10 +30,14 @@ public class MainActivity extends AppCompatActivity {
             }
         });
     }
-    /** Called when the user taps the setup button */
+    // Called when the user taps the setup button
     public void setup(View view) {
         Intent intent = new Intent(this, Setup.class);
         startActivity(intent);
     }
 
+    // Called when the user taps the send button
+    public void send(View view) {
+
+    }
 }

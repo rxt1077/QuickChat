@@ -1,7 +1,8 @@
 package com.quickchat.quickchat;
 
-import android.widget.TextView;
+import android.text.TextUtils;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -103,14 +104,17 @@ public enum Network {
                         response(outputStream, true, "peer removed");
                         break;
                     case "message":
-                        try {
-                            String message = jsonData.getString("message");
-                            activity.addMessage(message);
-                            response(outputStream,true, "message delivered");
-                        } catch (JSONException e) {
-                            e.printStackTrace();
-                            response(outputStream,false, "unable to parse message");
-                        }
+                        if (peers.contains(socket.getInetAddress())) {
+                            try {
+                                String message = jsonData.getString("message");
+                                activity.addMessage(message);
+                                response(outputStream, true, "message delivered");
+                            } catch (JSONException e) {
+                                e.printStackTrace();
+                                response(outputStream, false, "unable to parse message");
+                            }
+                        } else
+                            response(outputStream, false, "not in peer list");
                         break;
                     case "getPeers":
                         try {
@@ -148,6 +152,7 @@ public enum Network {
         }
     }
 
+    // returns a string representation of the devices IPv4 addresses
     String getIPAddresses() {
         try {
             List<String> sAddrs = new ArrayList<String>();
@@ -162,12 +167,26 @@ public enum Network {
                     }
                 }
             }
-            return sAddrs.toString();
+            return TextUtils.join(",", sAddrs);
         }
         catch (Exception e) {
             e.printStackTrace();
         }
         return "";
+    }
+
+    // returns a string representation of the current peers
+    String getPeers() {
+        String[] host_addresses = new String[peers.size()];
+
+        // the toString method on an InetAddress gives both the hostname/address causing most of
+        // our peers to show up as just an IP with a slash in front. This fixes that.
+        int i = 0;
+        for (InetAddress addr: peers) {
+            host_addresses[i] = addr.getHostAddress();
+            i++;
+        }
+        return TextUtils.join(",", host_addresses);
     }
 
     byte[] createResponse(boolean success, String message) {
@@ -190,6 +209,35 @@ public enum Network {
                 outputStream.write(response);
         } catch (IOException e) {
             e.printStackTrace();
+        }
+    }
+
+    // replaces our peer list with one from another peer
+    void updatePeers(InetAddress ip) {
+        try {
+            // create a socket and send our request
+            Socket s = new Socket(ip, PORT);
+            OutputStream out = s.getOutputStream();
+            InputStream in = s.getInputStream();
+            JSONObject request = new JSONObject();
+            request.put("command", "getPeers");
+            out.write(request.toString().getBytes(CHARSET));
+
+            // read and convert the response
+            byte[] buffer = new byte[1024];
+            in.read(buffer);
+            String jsonString = new String(buffer, CHARSET);
+            JSONObject response = new JSONObject(jsonString);
+            JSONArray json_peers = response.getJSONArray("peers");
+
+            // set peers
+            peers = new HashSet<InetAddress>();
+            for (int i = 0; i < json_peers.length(); i++) {
+                peers.add(InetAddress.getByName(json_peers.get(i).toString()));
+            }
+            peers.add(ip); // be sure to add the peer we got it from
+
+        } catch (Exception ignored) {
         }
     }
 }

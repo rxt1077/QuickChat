@@ -9,7 +9,6 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
@@ -20,11 +19,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public enum Network {
+public enum  Network {
     INSTANCE;
 
     String CHARSET = "UTF-8";
     int PORT = 40941;
+    int BUFFSIZE = 1024; // max size of a read or write in bytes
 
     MainActivity activity;
     ServerSocket serverSocket;
@@ -64,73 +64,75 @@ public enum Network {
         @Override
         public void run() {
             try {
-                OutputStream outputStream;
-                InputStream inputStream;
-                byte[] data = new byte[512];
-                String dataString = "";
-                JSONObject jsonData = null;
+                OutputStream out;
+                InputStream in;
+                JSONObject jsonData;
                 String command = "";
 
                 // setup our input and output streams
-                outputStream = socket.getOutputStream();
-                inputStream = socket.getInputStream();
-                inputStream.read(data, 0, data.length);
+                out = socket.getOutputStream();
+                in = socket.getInputStream();
 
-                // convert from bytes to a String (UTF-8 encoding)
-                try {
-                    dataString = new String(data, CHARSET);
-                } catch (UnsupportedEncodingException e) {
-                    e.printStackTrace();
+                // read the JSON from the socket
+                jsonData = readJSON(in);
+                if (jsonData == null) {
+                    response(out, false, "unable read JSON");
+                    in.close();
+                    out.close();
+                    return;
                 }
 
+                // get the command
                 try {
-                    // convert the string to a JSON object
-                    jsonData = new JSONObject(dataString);
-                    // extract the command from the JSON object
                     command = jsonData.getString("command");
                 } catch (JSONException e) {
-                    response(outputStream, false, "unable to parse command");
+                    response(out, false, "unable to parse command");
                     e.printStackTrace();
+                    in.close();
+                    out.close();
+                    return;
                 }
 
                 // take different actions based on the command
                 switch (command) {
                     case "add":
                         peers.add(socket.getInetAddress());
-                        response(outputStream, true, "peer added");
+                        response(out, true, "peer added");
                         break;
                     case "remove":
                         peers.remove(socket.getInetAddress());
-                        response(outputStream, true, "peer removed");
+                        response(out, true, "peer removed");
                         break;
                     case "message":
+                        // only accept messages from peers we know
                         if (peers.contains(socket.getInetAddress())) {
                             try {
                                 String message = jsonData.getString("message");
                                 activity.addMessage(message);
-                                response(outputStream, true, "message delivered");
+                                response(out, true, "message delivered");
                             } catch (JSONException e) {
                                 e.printStackTrace();
-                                response(outputStream, false, "unable to parse message");
+                                response(out, false, "unable to parse message");
                             }
                         } else
-                            response(outputStream, false, "not in peer list");
+                            response(out, false, "not in peer list");
                         break;
                     case "getPeers":
                         try {
-                            JSONObject jsonPeers = new JSONObject();
-                            jsonPeers.put("peers", peers);
-                            outputStream.write(jsonPeers.toString().getBytes(CHARSET));
+                            JSONArray jsonPeers = new JSONArray(peers);
+                            JSONObject jsonResponse = new JSONObject();
+                            jsonResponse.put("peers", jsonPeers);
+                            writeJSON(out, jsonResponse);
                         } catch (JSONException e) {
                             e.printStackTrace();
-                            response(outputStream, false, "unable to send peers");
+                            response(out, false, "unable to send peers");
                         }
                         break;
                     default:
-                        response(outputStream, false, "unknown command");
+                        response(out, false, "unknown command");
                 }
-                inputStream.close();
-                outputStream.close();
+                in.close();
+                out.close();
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -152,31 +154,38 @@ public enum Network {
         }
     }
 
-    // returns a string representation of the devices IPv4 addresses
-    String getIPAddresses() {
+    // returns a list of our IP addresses
+    List<InetAddress> ip() {
         try {
-            List<String> sAddrs = new ArrayList<String>();
+            List<InetAddress> addrs = new ArrayList<>();
             List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
-            for (NetworkInterface intf : interfaces) {
-                List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
-                for (InetAddress addr : addrs) {
-                    if (!addr.isLoopbackAddress()) {
-                        String sAddr = addr.getHostAddress();
-                        if (sAddr.indexOf(':') < 0) //make sure it is an IPv4 address (no colons)
-                            sAddrs.add(sAddr);
-                    }
-                }
-            }
-            return TextUtils.join(",", sAddrs);
+            for (NetworkInterface intf : interfaces)
+                addrs.addAll(Collections.list(intf.getInetAddresses()));
+            return addrs;
         }
         catch (Exception e) {
             e.printStackTrace();
         }
-        return "";
+        return null;
+    }
+
+    // returns a string representation of the IPv4 addresses that can be used to connect to us
+    String ipToString() {
+        List<InetAddress> addrs = ip();
+        List<String> sAddrs = new ArrayList<>();
+
+        for (InetAddress addr: addrs) {
+            if (!addr.isLoopbackAddress()) { // make sure it's not a loopback device
+                String sAddr = addr.getHostAddress();
+                if (sAddr.indexOf(':') < 0) //make sure it's an IPv4 address (no colons)
+                    sAddrs.add(sAddr);
+            }
+        }
+        return TextUtils.join(",", sAddrs);
     }
 
     // returns a string representation of the current peers
-    String getPeers() {
+    String peersToString() {
         String[] host_addresses = new String[peers.size()];
 
         // the toString method on an InetAddress gives both the hostname/address causing most of
@@ -189,31 +198,51 @@ public enum Network {
         return TextUtils.join(",", host_addresses);
     }
 
-    byte[] createResponse(boolean success, String message) {
-        try {
-            JSONObject response = new JSONObject();
+    // reads JSON from an InputStream, handling conversion
+    JSONObject readJSON(InputStream in) {
+        byte[] data = new byte[BUFFSIZE];
+        String dataString;
+        int count;
 
-            response.put("success", success);
-            response.put("message", message);
-            return response.toString().getBytes(CHARSET);
+        try {
+            // read the data
+            count = in.read(data, 0, data.length);
+            // convert from bytes to a String (UTF-8 encoding)
+            dataString = new String(data, CHARSET);
+            // convert the string to a JSON object
+            System.out.printf("readJSON: %s\n", dataString);
+            return new JSONObject(dataString);
         } catch (Exception e) {
             e.printStackTrace();
         }
         return null;
     }
 
-    void response(OutputStream outputStream, boolean success, String message) {
+    // writes JSON to an OutputStream, handling converion
+    void writeJSON(OutputStream out, JSONObject object) {
+        System.out.printf("writeJSON: %s\n", object.toString());
         try {
-            byte[] response = createResponse(success, message);
-            if (response != null)
-                outputStream.write(response);
-        } catch (IOException e) {
+            out.write(object.toString().getBytes(CHARSET));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // creates a sends a standard JSON response { "success": boolean, "message": String }
+    void response(OutputStream out, boolean success, String message) {
+        try {
+            JSONObject responseJSON = new JSONObject();
+
+            responseJSON.put("success", success);
+            responseJSON.put("message", message);
+            writeJSON(out, responseJSON);
+        } catch (JSONException e) {
             e.printStackTrace();
         }
     }
 
     // replaces our peer list with one from another peer
-    void updatePeers(InetAddress ip) {
+    void getPeers(InetAddress ip) {
         try {
             // create a socket and send our request
             Socket s = new Socket(ip, PORT);
@@ -221,23 +250,49 @@ public enum Network {
             InputStream in = s.getInputStream();
             JSONObject request = new JSONObject();
             request.put("command", "getPeers");
-            out.write(request.toString().getBytes(CHARSET));
+            writeJSON(out, request);
 
-            // read and convert the response
-            byte[] buffer = new byte[1024];
-            in.read(buffer);
-            String jsonString = new String(buffer, CHARSET);
-            JSONObject response = new JSONObject(jsonString);
-            JSONArray json_peers = response.getJSONArray("peers");
+            // read the response
+            JSONObject response = readJSON(in);
+            if (response == null)
+                return;
 
-            // set peers
+            // create a new peer list
+            List<InetAddress> local_addrs = ip();
             peers = new HashSet<InetAddress>();
+            JSONArray json_peers = response.getJSONArray("peers");
             for (int i = 0; i < json_peers.length(); i++) {
-                peers.add(InetAddress.getByName(json_peers.get(i).toString()));
+                InetAddress peer = InetAddress.getByName(json_peers.get(i).toString());
+                if (! local_addrs.contains(peer)) // do not add ourselves
+                    peers.add(peer);
             }
             peers.add(ip); // be sure to add the peer we got it from
-
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            e.printStackTrace();
         }
+    }
+
+    // make a request to an address that they add us to their peers list
+    void requestAdd(InetAddress ip) {
+        try {
+            // create a socket and send our request
+            Socket s = new Socket(ip, PORT);
+            OutputStream out = s.getOutputStream();
+            InputStream in = s.getInputStream();
+            JSONObject request = new JSONObject();
+            request.put("command", "add");
+            writeJSON(out, request);
+
+            // read the response
+            JSONObject response = readJSON(in);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // send out requests to all our peers that they add us to their peers list
+    void requestAddAllPeers() {
+        for (InetAddress addr: peers)
+            requestAdd(addr);
     }
 }

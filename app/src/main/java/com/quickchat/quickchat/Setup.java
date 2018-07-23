@@ -1,11 +1,13 @@
 package com.quickchat.quickchat;
 
+import android.content.Context;
 import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.StrictMode;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.View;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.TextView;
 
@@ -44,11 +46,16 @@ public class Setup extends AppCompatActivity {
         try {
             // convert the IP address they entered
             InetAddress ip = InetAddress.getByName(ipText.getText().toString());
+            // remove ourselves from all our current peers lists
+            Net.requestRemoveAllPeers();
             // update our peers list
             Net.getPeers(ip);
-            // request that all our peers add us to their peers list
+            // request that all our new peers add us to their peers list
             Net.requestAddAllPeers();
             // refresh the display
+            ipText.setText("");
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            imm.hideSoftInputFromWindow(ipText.getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
             refreshView();
         } catch (UnknownHostException e) {
             e.printStackTrace();

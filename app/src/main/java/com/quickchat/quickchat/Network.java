@@ -14,6 +14,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -29,6 +30,7 @@ public enum  Network {
     MainActivity activity;
     ServerSocket serverSocket;
     Set<InetAddress> peers = new HashSet<InetAddress>();
+    String messages = "";
 
     private Network() {
         startServer();
@@ -104,11 +106,12 @@ public enum  Network {
                         response(out, true, "peer removed");
                         break;
                     case "message":
+                        InetAddress addr = socket.getInetAddress();
                         // only accept messages from peers we know
-                        if (peers.contains(socket.getInetAddress())) {
+                        if (peers.contains(addr)) {
                             try {
                                 String message = jsonData.getString("message");
-                                activity.addMessage(message);
+                                addMessage(addr.getHostAddress(), message);
                                 response(out, true, "message delivered");
                             } catch (JSONException e) {
                                 e.printStackTrace();
@@ -200,15 +203,13 @@ public enum  Network {
 
     // reads JSON from an InputStream, handling conversion
     JSONObject readJSON(InputStream in) {
-        byte[] data = new byte[BUFFSIZE];
-        String dataString;
-        int count;
-
         try {
             // read the data
-            count = in.read(data, 0, data.length);
+            byte[] buffer = new byte[BUFFSIZE];
+            int count = in.read(buffer, 0, buffer.length);
+            byte[] data = Arrays.copyOf(buffer, count);
             // convert from bytes to a String (UTF-8 encoding)
-            dataString = new String(data, CHARSET);
+            String dataString = new String(data, CHARSET);
             // convert the string to a JSON object
             System.out.printf("readJSON: %s\n", dataString);
             return new JSONObject(dataString);
@@ -228,6 +229,22 @@ public enum  Network {
         }
     }
 
+    // sends a JSON object to an IP address and receives a JSON object
+    JSONObject sendAndRecieve(InetAddress ip, JSONObject request) {
+        try {
+            // create a socket and send our request
+            Socket s = new Socket(ip, PORT);
+            OutputStream out = s.getOutputStream();
+            InputStream in = s.getInputStream();
+            writeJSON(out, request);
+            // return the response
+            return readJSON(in);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
     // creates a sends a standard JSON response { "success": boolean, "message": String }
     void response(OutputStream out, boolean success, String message) {
         try {
@@ -244,16 +261,9 @@ public enum  Network {
     // replaces our peer list with one from another peer
     void getPeers(InetAddress ip) {
         try {
-            // create a socket and send our request
-            Socket s = new Socket(ip, PORT);
-            OutputStream out = s.getOutputStream();
-            InputStream in = s.getInputStream();
             JSONObject request = new JSONObject();
             request.put("command", "getPeers");
-            writeJSON(out, request);
-
-            // read the response
-            JSONObject response = readJSON(in);
+            JSONObject response = sendAndRecieve(ip, request);
             if (response == null)
                 return;
 
@@ -272,19 +282,12 @@ public enum  Network {
         }
     }
 
-    // make a request to an address that they add us to their peers list
+    // send a request to an address that they add us to their peers list
     void requestAdd(InetAddress ip) {
         try {
-            // create a socket and send our request
-            Socket s = new Socket(ip, PORT);
-            OutputStream out = s.getOutputStream();
-            InputStream in = s.getInputStream();
             JSONObject request = new JSONObject();
             request.put("command", "add");
-            writeJSON(out, request);
-
-            // read the response
-            JSONObject response = readJSON(in);
+            sendAndRecieve(ip, request);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -294,5 +297,48 @@ public enum  Network {
     void requestAddAllPeers() {
         for (InetAddress addr: peers)
             requestAdd(addr);
+    }
+
+    // send a request to an address that they remove us from their peers list
+    void requestRemove(InetAddress ip) {
+        try {
+            JSONObject request = new JSONObject();
+            request.put("command", "remove");
+            sendAndRecieve(ip, request);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // send out requests to all our peers asking that they remove us
+    void requestRemoveAllPeers() {
+        for (InetAddress addr: peers)
+            requestRemove(addr);
+    }
+
+    // adds a message to our message string and tells the UI thread to refresh the view
+    void addMessage(String name, String message) {
+        messages += String.format("%s: %s\n", name, message);
+        activity.refreshView();
+    }
+
+    // sends a message to a peer
+    void sendMessage(InetAddress ip, String message) {
+        try {
+            JSONObject request = new JSONObject();
+            request.put("command", "message");
+            request.put("message", message);
+            sendAndRecieve(ip, request);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // sends a message to everyone in our peer list
+    void sendMessageAllPeers(String message) {
+        for (InetAddress addr: peers) {
+            sendMessage(addr, message);
+            addMessage("me", message); // add it to our view as well
+        }
     }
 }
